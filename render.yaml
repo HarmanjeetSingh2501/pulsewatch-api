@@ -4,8 +4,8 @@ services:
     env: node
     region: oregon
     plan: free
-    buildCommand: corepack enable && pnpm install && pnpm build
-    startCommand: pnpm start
+    buildCommand: npx pnpm@12 install && npx pnpm@12 build
+    startCommand: npx pnpm@12 start
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
