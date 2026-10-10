@@ -4,6 +4,7 @@ import { env, isDev } from '../config/env.js';
 import { errorHandler } from './plugins/errorHandler.js';
 import { healthRoutes } from './routes/health.js';
 import { urlRoutes } from './routes/urls.js';
+import { incidentRoutes } from './routes/incidents.js';
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -37,6 +38,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   // ─── Routes ─────────────────────────────────────────────
   await app.register(healthRoutes, { prefix: '/' });
   await app.register(urlRoutes, { prefix: '/api/v1/urls' });
+  await app.register(incidentRoutes, { prefix: '/api/v1/incidents' });
 
   return app;
 }
