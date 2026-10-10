@@ -28,9 +28,23 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   // ─── Plugins ────────────────────────────────────────────
   await app.register(cors, {
-    origin: [env.FRONTEND_URL, 'http://localhost:3001'],
-    credentials: true,
-  });
+  origin: (origin, cb) => {
+    // Allow: no origin (Postman), localhost dev, or any vercel.app subdomain
+    if (
+      !origin ||
+      origin === 'http://localhost:3001' ||
+      origin.endsWith('.vercel.app') ||
+      origin === env.FRONTEND_URL
+    ) {
+      cb(null, true);
+    } else {
+      cb(new Error('Not allowed by CORS'), false);
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+});
 
   // ─── Error Handler ──────────────────────────────────────
   app.setErrorHandler(errorHandler);
