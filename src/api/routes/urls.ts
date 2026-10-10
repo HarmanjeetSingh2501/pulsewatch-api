@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, inArray } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import { urls, pings } from '../../db/schema.js';
 
@@ -27,19 +27,52 @@ const listQuerySchema = z.object({
 
 // ─── Routes ───────────────────────────────────────────────
 export async function urlRoutes(app: FastifyInstance) {
-  // GET /api/v1/urls — list all URLs
+  // ─── GET /api/v1/urls — list all URLs with latest ping ───
   app.get('/', async (request, reply) => {
     const userId = 1; // TODO: from JWT in Week 2
-    const list = await db
+
+    // Step 1: fetch all URLs for the user
+    const urlList = await db
       .select()
       .from(urls)
       .where(eq(urls.userId, userId))
       .orderBy(desc(urls.createdAt));
 
-    return reply.send(list);
+    if (urlList.length === 0) {
+      return reply.send([]);
+    }
+
+    // Step 2: fetch recent pings for all those URLs in one query
+    const urlIds = urlList.map((u) => u.id);
+
+    const recentPings = await db
+      .select()
+      .from(pings)
+      .where(inArray(pings.urlId, urlIds))
+      .orderBy(desc(pings.checkedAt))
+      .limit(500);
+
+    // Step 3: keep only the most recent ping per URL
+    const latestByUrl = new Map<number, typeof recentPings[number]>();
+    for (const ping of recentPings) {
+      if (!latestByUrl.has(ping.urlId)) {
+        latestByUrl.set(ping.urlId, ping);
+      }
+    }
+
+    // Step 4: attach latest ping to each URL as `recentPings`
+    const enriched = urlList.map((url) => {
+      const latest = latestByUrl.get(url.id);
+      return {
+        ...url,
+        recentPings: latest ? [latest] : [],
+      };
+    });
+
+    return reply.send(enriched);
   });
 
-  // POST /api/v1/urls — create a URL
+  // ─── POST /api/v1/urls — create a URL ────────────────────
   app.post('/', async (request, reply) => {
     const body = createUrlSchema.parse(request.body);
     const userId = 1;
@@ -58,16 +91,13 @@ export async function urlRoutes(app: FastifyInstance) {
     return reply.status(201).send(created);
   });
 
-  // ⚠️ IMPORTANT: /:id/pings MUST come BEFORE /:id
-  // Otherwise Fastify treats "pings" as part of the :id
-
-  // GET /api/v1/urls/:id/pings — paginated ping history
+  // ─── GET /api/v1/urls/:id/pings — paginated history ──────
+  // ⚠️ MUST come before /:id route
   app.get('/:id/pings', async (request, reply) => {
     const { id } = idParamSchema.parse(request.params);
     const { limit } = listQuerySchema.parse(request.query);
     const userId = 1;
 
-    // Verify URL belongs to user
     const [url] = await db
       .select()
       .from(urls)
@@ -92,7 +122,7 @@ export async function urlRoutes(app: FastifyInstance) {
     });
   });
 
-  // GET /api/v1/urls/:id — get one URL with recent pings
+  // ─── GET /api/v1/urls/:id — one URL + recent pings ───────
   app.get('/:id', async (request, reply) => {
     const { id } = idParamSchema.parse(request.params);
     const userId = 1;
@@ -117,7 +147,7 @@ export async function urlRoutes(app: FastifyInstance) {
     return reply.send({ ...url, recentPings });
   });
 
-  // PATCH /api/v1/urls/:id — update a URL
+  // ─── PATCH /api/v1/urls/:id — update a URL ───────────────
   app.patch('/:id', async (request, reply) => {
     const { id } = idParamSchema.parse(request.params);
     const body = updateUrlSchema.parse(request.body);
@@ -136,7 +166,7 @@ export async function urlRoutes(app: FastifyInstance) {
     return reply.send(updated);
   });
 
-  // DELETE /api/v1/urls/:id — remove a URL
+  // ─── DELETE /api/v1/urls/:id — remove a URL ──────────────
   app.delete('/:id', async (request, reply) => {
     const { id } = idParamSchema.parse(request.params);
     const userId = 1;
