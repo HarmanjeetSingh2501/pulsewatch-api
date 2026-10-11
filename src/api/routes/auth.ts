@@ -1,13 +1,13 @@
-import { FastifyInstance } from 'fastify';
-import { z } from 'zod';
-import bcrypt from 'bcrypt';
-import { eq } from 'drizzle-orm';
-import { db } from '../../db/client.js';
-import { users } from '../../db/schema.js';
+import { FastifyInstance } from "fastify";
+import { z } from "zod";
+import bcrypt from "bcrypt";
+import { eq } from "drizzle-orm";
+import { db } from "../../db/client.js";
+import { users } from "../../db/schema.js";
 
 const registerSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
+  password: z.string().min(8, "Password must be at least 8 characters"),
 });
 
 const loginSchema = z.object({
@@ -17,7 +17,7 @@ const loginSchema = z.object({
 
 export async function authRoutes(app: FastifyInstance) {
   // ─── POST /api/v1/auth/register ──────────────────────────
-  app.post('/register', async (request, reply) => {
+  app.post("/register", async (request, reply) => {
     const body = registerSchema.parse(request.body);
 
     const existing = await db
@@ -27,7 +27,7 @@ export async function authRoutes(app: FastifyInstance) {
       .limit(1);
 
     if (existing.length > 0) {
-      return reply.status(409).send({ error: 'Email already registered' });
+      return reply.status(409).send({ error: "Email already registered" });
     }
 
     const passwordHash = await bcrypt.hash(body.password, 10);
@@ -37,6 +37,7 @@ export async function authRoutes(app: FastifyInstance) {
       .values({
         email: body.email,
         passwordHash,
+        provider: "local",
       })
       .returning();
 
@@ -49,7 +50,7 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   // ─── POST /api/v1/auth/login ─────────────────────────────
-  app.post('/login', async (request, reply) => {
+  app.post("/login", async (request, reply) => {
     const body = loginSchema.parse(request.body);
 
     const [user] = await db
@@ -59,12 +60,20 @@ export async function authRoutes(app: FastifyInstance) {
       .limit(1);
 
     if (!user) {
-      return reply.status(401).send({ error: 'Invalid email or password' });
+      return reply.status(401).send({ error: "Invalid email or password" });
+    }
+
+    // Google users have no password — reject email/password login
+    if (!user.passwordHash) {
+      return reply.status(401).send({
+        error:
+          "This account uses Google sign-in. Please use the Google button.",
+      });
     }
 
     const valid = await bcrypt.compare(body.password, user.passwordHash);
     if (!valid) {
-      return reply.status(401).send({ error: 'Invalid email or password' });
+      return reply.status(401).send({ error: "Invalid email or password" });
     }
 
     const token = app.jwt.sign({ userId: user.id, email: user.email });
@@ -76,7 +85,7 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   // ─── GET /api/v1/auth/me ─────────────────────────────────
-  app.get('/me', { onRequest: [app.authenticate] }, async (request, reply) => {
+  app.get("/me", { onRequest: [app.authenticate] }, async (request, reply) => {
     const { userId } = request.user as { userId: number };
 
     const [user] = await db
@@ -90,7 +99,7 @@ export async function authRoutes(app: FastifyInstance) {
       .limit(1);
 
     if (!user) {
-      return reply.status(404).send({ error: 'User not found' });
+      return reply.status(404).send({ error: "User not found" });
     }
 
     return reply.send(user);

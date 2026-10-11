@@ -4,9 +4,10 @@ import jwt from '@fastify/jwt';
 import { env, isDev } from '../config/env.js';
 import { errorHandler } from './plugins/errorHandler.js';
 import { healthRoutes } from './routes/health.js';
+import { authRoutes } from './routes/auth.js';
+import { googleAuthRoutes } from './routes/google-auth.js';
 import { urlRoutes } from './routes/urls.js';
 import { incidentRoutes } from './routes/incidents.js';
-import { authRoutes } from './routes/auth.js';
 import { authenticate } from './middleware/auth.js';
 
 export async function buildServer(): Promise<FastifyInstance> {
@@ -60,6 +61,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   // ─── Routes ─────────────────────────────────────────────
   await app.register(healthRoutes, { prefix: '/' });
   await app.register(authRoutes, { prefix: '/api/v1/auth' });
+  await app.register(googleAuthRoutes, { prefix: '/api/v1/auth' });
   await app.register(urlRoutes, { prefix: '/api/v1/urls' });
   await app.register(incidentRoutes, { prefix: '/api/v1/incidents' });
 

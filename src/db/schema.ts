@@ -11,11 +11,12 @@ import {
 } from "drizzle-orm/pg-core";
 
 // ─── USERS ────────────────────────────────────────────────
-export const users = pgTable("users", {
-  id: serial("id").primaryKey(),
-  email: varchar("email", { length: 255 }).notNull().unique(),
-  passwordHash: text("password_hash").notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+export const users = pgTable('users', {
+  id: serial('id').primaryKey(),
+  email: varchar('email', { length: 255 }).notNull().unique(),
+  passwordHash: text('password_hash'),  // nullable for OAuth users
+  provider: varchar('provider', { length: 32 }).default('local').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
 // ─── URLS ─────────────────────────────────────────────────
