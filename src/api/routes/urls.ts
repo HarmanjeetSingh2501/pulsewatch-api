@@ -1,13 +1,13 @@
-import { FastifyInstance } from "fastify";
-import { z } from "zod";
-import { eq, desc, and, inArray } from "drizzle-orm";
-import { db } from "../../db/client.js";
-import { urls, pings } from "../../db/schema.js";
-import { computeUrlStatus } from "../../lib/url-status.js";
+import { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { eq, desc, and, inArray } from 'drizzle-orm';
+import { db } from '../../db/client.js';
+import { urls, pings } from '../../db/schema.js';
+import { computeUrlStatus } from '../../lib/url-status.js';
 
 // ─── Validation Schemas ───────────────────────────────────
 const createUrlSchema = z.object({
-  url: z.string().url("Must be a valid URL"),
+  url: z.string().url('Must be a valid URL'),
   name: z.string().min(1).max(100),
   checkIntervalSeconds: z.number().int().min(30).max(3600).optional(),
 });
@@ -28,12 +28,10 @@ const listQuerySchema = z.object({
 
 // ─── Routes ───────────────────────────────────────────────
 export async function urlRoutes(app: FastifyInstance) {
-  // ─── GET /api/v1/urls — list all URLs with latest ping ───
-  // GET /api/v1/urls — list all URLs with latest ping AND computed status
-  app.get("/", async (request, reply) => {
-    const userId = 1; // TODO: from JWT
+  // ─── GET /api/v1/urls — list all URLs for the current user ───
+  app.get('/', { onRequest: [app.authenticate] }, async (request, reply) => {
+    const userId = (request.user as { userId: number }).userId;
 
-    // Fetch all URLs for the user
     const urlList = await db
       .select()
       .from(urls)
@@ -44,7 +42,6 @@ export async function urlRoutes(app: FastifyInstance) {
       return reply.send([]);
     }
 
-    // Fetch recent pings for all URLs in one query
     const urlIds = urlList.map((u) => u.id);
     const recentPings = await db
       .select()
@@ -53,7 +50,6 @@ export async function urlRoutes(app: FastifyInstance) {
       .orderBy(desc(pings.checkedAt))
       .limit(500);
 
-    // Group by URL, take latest 1 per URL
     const latestByUrl = new Map<number, (typeof recentPings)[number]>();
     for (const ping of recentPings) {
       if (!latestByUrl.has(ping.urlId)) {
@@ -61,7 +57,6 @@ export async function urlRoutes(app: FastifyInstance) {
       }
     }
 
-    // Compute status for each URL (parallel)
     const enriched = await Promise.all(
       urlList.map(async (url) => {
         const latest = latestByUrl.get(url.id);
@@ -75,16 +70,16 @@ export async function urlRoutes(app: FastifyInstance) {
           baselineMean: statusResult.baselineMean,
           baselineStdDev: statusResult.baselineStdDev,
         };
-      }),
+      })
     );
 
     return reply.send(enriched);
   });
 
-  // ─── POST /api/v1/urls — create a URL ────────────────────
-  app.post("/", async (request, reply) => {
+  // ─── POST /api/v1/urls — create a URL for the current user ───
+  app.post('/', { onRequest: [app.authenticate] }, async (request, reply) => {
     const body = createUrlSchema.parse(request.body);
-    const userId = 1;
+    const userId = (request.user as { userId: number }).userId;
 
     const [created] = await db
       .insert(urls)
@@ -100,41 +95,44 @@ export async function urlRoutes(app: FastifyInstance) {
     return reply.status(201).send(created);
   });
 
-  // ─── GET /api/v1/urls/:id/pings — paginated history ──────
-  // ⚠️ MUST come before /:id route
-  app.get("/:id/pings", async (request, reply) => {
-    const { id } = idParamSchema.parse(request.params);
-    const { limit } = listQuerySchema.parse(request.query);
-    const userId = 1;
+  // ─── GET /api/v1/urls/:id/pings ──────────────────────────
+  app.get(
+    '/:id/pings',
+    { onRequest: [app.authenticate] },
+    async (request, reply) => {
+      const { id } = idParamSchema.parse(request.params);
+      const { limit } = listQuerySchema.parse(request.query);
+      const userId = (request.user as { userId: number }).userId;
 
-    const [url] = await db
-      .select()
-      .from(urls)
-      .where(and(eq(urls.id, id), eq(urls.userId, userId)))
-      .limit(1);
+      const [url] = await db
+        .select()
+        .from(urls)
+        .where(and(eq(urls.id, id), eq(urls.userId, userId)))
+        .limit(1);
 
-    if (!url) {
-      return reply.status(404).send({ error: "URL not found" });
+      if (!url) {
+        return reply.status(404).send({ error: 'URL not found' });
+      }
+
+      const history = await db
+        .select()
+        .from(pings)
+        .where(eq(pings.urlId, id))
+        .orderBy(desc(pings.checkedAt))
+        .limit(limit);
+
+      return reply.send({
+        urlId: id,
+        count: history.length,
+        pings: history,
+      });
     }
+  );
 
-    const history = await db
-      .select()
-      .from(pings)
-      .where(eq(pings.urlId, id))
-      .orderBy(desc(pings.checkedAt))
-      .limit(limit);
-
-    return reply.send({
-      urlId: id,
-      count: history.length,
-      pings: history,
-    });
-  });
-
-  // ─── GET /api/v1/urls/:id — one URL + recent pings ───────
-  app.get("/:id", async (request, reply) => {
+  // ─── GET /api/v1/urls/:id ────────────────────────────────
+  app.get('/:id', { onRequest: [app.authenticate] }, async (request, reply) => {
     const { id } = idParamSchema.parse(request.params);
-    const userId = 1;
+    const userId = (request.user as { userId: number }).userId;
 
     const [url] = await db
       .select()
@@ -143,7 +141,7 @@ export async function urlRoutes(app: FastifyInstance) {
       .limit(1);
 
     if (!url) {
-      return reply.status(404).send({ error: "URL not found" });
+      return reply.status(404).send({ error: 'URL not found' });
     }
 
     const recentPings = await db
@@ -156,39 +154,47 @@ export async function urlRoutes(app: FastifyInstance) {
     return reply.send({ ...url, recentPings });
   });
 
-  // ─── PATCH /api/v1/urls/:id — update a URL ───────────────
-  app.patch("/:id", async (request, reply) => {
-    const { id } = idParamSchema.parse(request.params);
-    const body = updateUrlSchema.parse(request.body);
-    const userId = 1;
+  // ─── PATCH /api/v1/urls/:id ──────────────────────────────
+  app.patch(
+    '/:id',
+    { onRequest: [app.authenticate] },
+    async (request, reply) => {
+      const { id } = idParamSchema.parse(request.params);
+      const body = updateUrlSchema.parse(request.body);
+      const userId = (request.user as { userId: number }).userId;
 
-    const [updated] = await db
-      .update(urls)
-      .set(body)
-      .where(and(eq(urls.id, id), eq(urls.userId, userId)))
-      .returning();
+      const [updated] = await db
+        .update(urls)
+        .set(body)
+        .where(and(eq(urls.id, id), eq(urls.userId, userId)))
+        .returning();
 
-    if (!updated) {
-      return reply.status(404).send({ error: "URL not found" });
+      if (!updated) {
+        return reply.status(404).send({ error: 'URL not found' });
+      }
+
+      return reply.send(updated);
     }
+  );
 
-    return reply.send(updated);
-  });
+  // ─── DELETE /api/v1/urls/:id ─────────────────────────────
+  app.delete(
+    '/:id',
+    { onRequest: [app.authenticate] },
+    async (request, reply) => {
+      const { id } = idParamSchema.parse(request.params);
+      const userId = (request.user as { userId: number }).userId;
 
-  // ─── DELETE /api/v1/urls/:id — remove a URL ──────────────
-  app.delete("/:id", async (request, reply) => {
-    const { id } = idParamSchema.parse(request.params);
-    const userId = 1;
+      const [deleted] = await db
+        .delete(urls)
+        .where(and(eq(urls.id, id), eq(urls.userId, userId)))
+        .returning();
 
-    const [deleted] = await db
-      .delete(urls)
-      .where(and(eq(urls.id, id), eq(urls.userId, userId)))
-      .returning();
+      if (!deleted) {
+        return reply.status(404).send({ error: 'URL not found' });
+      }
 
-    if (!deleted) {
-      return reply.status(404).send({ error: "URL not found" });
+      return reply.status(204).send();
     }
-
-    return reply.status(204).send();
-  });
+  );
 }
