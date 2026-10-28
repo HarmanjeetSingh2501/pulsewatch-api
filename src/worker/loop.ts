@@ -141,11 +141,17 @@ async function flushPings(force = false) {
 export async function startWorkerLoop() {
   logger.info("Worker loop started");
 
-  try {
-    await refreshSchedule();
-  } catch (err) {
-    logger.error({ err }, "Initial schedule load failed");
-  }
+  // Load the schedule; if the DB isn't ready, keep retrying (60s) instead of
+  // leaving the worker permanently empty.
+  const loadWithRetry = async () => {
+    try {
+      await refreshSchedule();
+    } catch (err) {
+      logger.error({ err }, "Schedule load failed, retrying in 60s");
+      setTimeout(() => void loadWithRetry(), 60_000);
+    }
+  };
+  await loadWithRetry();
 
   // Tick: memory only
   setInterval(() => {
