@@ -1,13 +1,14 @@
-import { FastifyInstance } from 'fastify';
-import { z } from 'zod';
-import { eq, desc, and, inArray } from 'drizzle-orm';
-import { db } from '../../db/client.js';
-import { urls, pings } from '../../db/schema.js';
-import { computeUrlStatus } from '../../lib/url-status.js';
+import { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { eq, desc, and, inArray } from "drizzle-orm";
+import { db } from "../../db/client.js";
+import { urls, pings } from "../../db/schema.js";
+import { computeUrlStatus } from "../../lib/url-status.js";
+import { scheduleUrl, unscheduleUrl } from "../../worker/loop.js";
 
 // ─── Validation Schemas ───────────────────────────────────
 const createUrlSchema = z.object({
-  url: z.string().url('Must be a valid URL'),
+  url: z.string().url("Must be a valid URL"),
   name: z.string().min(1).max(100),
   checkIntervalSeconds: z.number().int().min(30).max(3600).optional(),
 });
@@ -29,7 +30,7 @@ const listQuerySchema = z.object({
 // ─── Routes ───────────────────────────────────────────────
 export async function urlRoutes(app: FastifyInstance) {
   // ─── GET /api/v1/urls — list all URLs for the current user ───
-  app.get('/', { onRequest: [app.authenticate] }, async (request, reply) => {
+  app.get("/", { onRequest: [app.authenticate] }, async (request, reply) => {
     const userId = (request.user as { userId: number }).userId;
 
     const urlList = await db
@@ -70,14 +71,14 @@ export async function urlRoutes(app: FastifyInstance) {
           baselineMean: statusResult.baselineMean,
           baselineStdDev: statusResult.baselineStdDev,
         };
-      })
+      }),
     );
 
     return reply.send(enriched);
   });
 
   // ─── POST /api/v1/urls — create a URL for the current user ───
-  app.post('/', { onRequest: [app.authenticate] }, async (request, reply) => {
+  app.post("/", { onRequest: [app.authenticate] }, async (request, reply) => {
     const body = createUrlSchema.parse(request.body);
     const userId = (request.user as { userId: number }).userId;
 
@@ -92,12 +93,15 @@ export async function urlRoutes(app: FastifyInstance) {
       })
       .returning();
 
+    // Add to the in-memory worker schedule (first check runs on the next tick)
+    scheduleUrl(created);
+
     return reply.status(201).send(created);
   });
 
   // ─── GET /api/v1/urls/:id/pings ──────────────────────────
   app.get(
-    '/:id/pings',
+    "/:id/pings",
     { onRequest: [app.authenticate] },
     async (request, reply) => {
       const { id } = idParamSchema.parse(request.params);
@@ -111,7 +115,7 @@ export async function urlRoutes(app: FastifyInstance) {
         .limit(1);
 
       if (!url) {
-        return reply.status(404).send({ error: 'URL not found' });
+        return reply.status(404).send({ error: "URL not found" });
       }
 
       const history = await db
@@ -126,11 +130,11 @@ export async function urlRoutes(app: FastifyInstance) {
         count: history.length,
         pings: history,
       });
-    }
+    },
   );
 
   // ─── GET /api/v1/urls/:id ────────────────────────────────
-  app.get('/:id', { onRequest: [app.authenticate] }, async (request, reply) => {
+  app.get("/:id", { onRequest: [app.authenticate] }, async (request, reply) => {
     const { id } = idParamSchema.parse(request.params);
     const userId = (request.user as { userId: number }).userId;
 
@@ -141,7 +145,7 @@ export async function urlRoutes(app: FastifyInstance) {
       .limit(1);
 
     if (!url) {
-      return reply.status(404).send({ error: 'URL not found' });
+      return reply.status(404).send({ error: "URL not found" });
     }
 
     const recentPings = await db
@@ -156,7 +160,7 @@ export async function urlRoutes(app: FastifyInstance) {
 
   // ─── PATCH /api/v1/urls/:id ──────────────────────────────
   app.patch(
-    '/:id',
+    "/:id",
     { onRequest: [app.authenticate] },
     async (request, reply) => {
       const { id } = idParamSchema.parse(request.params);
@@ -170,16 +174,19 @@ export async function urlRoutes(app: FastifyInstance) {
         .returning();
 
       if (!updated) {
-        return reply.status(404).send({ error: 'URL not found' });
+        return reply.status(404).send({ error: "URL not found" });
       }
 
+      // Handles pause (isActive: false), resume and interval changes
+      scheduleUrl(updated);
+
       return reply.send(updated);
-    }
+    },
   );
 
   // ─── DELETE /api/v1/urls/:id ─────────────────────────────
   app.delete(
-    '/:id',
+    "/:id",
     { onRequest: [app.authenticate] },
     async (request, reply) => {
       const { id } = idParamSchema.parse(request.params);
@@ -191,10 +198,12 @@ export async function urlRoutes(app: FastifyInstance) {
         .returning();
 
       if (!deleted) {
-        return reply.status(404).send({ error: 'URL not found' });
+        return reply.status(404).send({ error: "URL not found" });
       }
 
+      unscheduleUrl(deleted.id);
+
       return reply.status(204).send();
-    }
+    },
   );
 }
